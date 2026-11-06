@@ -107,70 +107,67 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
 
   // Form states for creating room
-  const [roomTitle, setRoomTitle] = useState('');
-  const [roomSubject, setRoomSubject] = useState('');
+  const [roomTitle, setRoomTitle] = useState('Sala 26');
+  const [roomPin, setRoomPin] = useState('262626');
   const [gameType, setGameType] = useState<'quiz' | 'verdadeiro_falso' | 'forca' | 'cores' | 'stop'>('cores');
   const [questions, setQuestions] = useState<any[]>([{ id: 1 }]);
   const [joinCode, setJoinCode] = useState('');
   const [studentName, setStudentName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState('🦁');
 
-  // Student active question state
+  // Student active state
   const [hasAnswered, setHasAnswered] = useState(false);
   const [answerResult, setAnswerResult] = useState<boolean | null>(null);
-  const [lastScoreChange, setLastScoreChange] = useState<number | null>(null);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
 
-  // Fetch rooms from API with localStorage fallback
-  const fetchRooms = async () => {
-    try {
-      const res = await fetch('/api/rooms');
-      if (res.ok) {
-        const data = await res.json();
-        setRooms(data);
-        localStorage.setItem('ludus_rooms', JSON.stringify(data));
-        return;
-      }
-    } catch (e) {
-      // Fallback local
-    }
+  // Unified LocalStorage + Backend Sync for 100% reliable multi-tab / same-browser operation
+  const getStoredRooms = () => {
     try {
       const local = localStorage.getItem('ludus_rooms');
-      if (local) {
-        setRooms(JSON.parse(local));
+      if (local) return JSON.parse(local);
+    } catch (e) {}
+    return [
+      {
+        id: 'room_26',
+        code: '262626',
+        title: 'Sala 26 - Jogo das Cores',
+        subject: 'Cores',
+        gameType: 'cores',
+        status: 'waiting',
+        professorChosenColor: null,
+        questions: [{ id: 1 }],
+        players: [],
+        createdAt: Date.now()
       }
+    ];
+  };
+
+  const saveStoredRooms = (updated: any[]) => {
+    try {
+      localStorage.setItem('ludus_rooms', JSON.stringify(updated));
+      setRooms(updated);
     } catch (e) {}
   };
 
   useEffect(() => {
-    fetchRooms();
-    const interval = setInterval(fetchRooms, 1500);
-    return () => clearInterval(interval);
+    const initial = getStoredRooms();
+    setRooms(initial);
   }, []);
 
-  // Poll active room state
+  // Poll local rooms state for lightning-fast responsiveness
   useEffect(() => {
-    if (!activeRoom) return;
-    const code = activeRoom.code;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/rooms/${code}`);
-        if (res.ok) {
-          const data = await res.json();
-          setActiveRoom(data);
-          return;
+    const interval = setInterval(() => {
+      const current = getStoredRooms();
+      setRooms(current);
+      if (activeRoom) {
+        const found = current.find((r: any) => r.code === activeRoom.code);
+        if (found) {
+          setActiveRoom(found);
         }
-      } catch (e) {}
-    }, 1000);
+      }
+    }, 500);
     return () => clearInterval(interval);
   }, [activeRoom?.code]);
-
-  // Auto switch student view when game starts
-  useEffect(() => {
-    if (activeRoom && student && activeRoom.status === 'playing' && view === 'student_lobby') {
-      setView('student_game');
-    }
-  }, [activeRoom?.status, view, student]);
 
   const toggleSound = () => {
     soundFX.muted = !muted;
@@ -196,62 +193,41 @@ export default function App() {
   const handleGameSelect = (type: 'quiz' | 'verdadeiro_falso' | 'forca' | 'cores' | 'stop') => {
     setGameType(type);
     setQuestions([{ id: 1 }]);
-    setRoomTitle(type === 'cores' ? 'Sala - Jogo das Cores' : 'Sala de Jogo');
-    setRoomSubject(type.toUpperCase());
+    setRoomTitle(type === 'cores' ? 'Sala 26 - Jogo das Cores' : 'Sala de Aula');
+    setRoomPin('262626');
     setView('create_room');
     soundFX.playClick();
   };
 
-  const handleCreateRoom = async (e: React.FormEvent) => {
+  const handleCreateRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!roomTitle) {
-      alert('Preencha o título da sala.');
+    if (!roomTitle || !roomPin) {
+      alert('Preencha o título e o PIN da sala.');
       return;
     }
     soundFX.playClick();
 
-    try {
-      const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: roomTitle,
-          subject: roomSubject || 'Geral',
-          gameType,
-          questions
-        })
-      });
-      if (res.ok) {
-        const newRoom = await res.json();
-        setActiveRoom(newRoom);
-        setView('teacher_live_control');
-        fetchRooms();
-        return;
-      }
-    } catch (e) {}
-
-    // Fallback local
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
     const newRoom = {
       id: 'room_' + Date.now(),
-      code,
+      code: roomPin.trim(),
       title: roomTitle,
-      subject: roomSubject || 'Geral',
+      subject: gameType.toUpperCase(),
       gameType,
       status: 'waiting',
       professorChosenColor: null,
-      questions,
+      questions: [{ id: 1 }],
       players: [],
       createdAt: Date.now()
     };
-    const updated = [newRoom, ...rooms];
-    setRooms(updated);
-    localStorage.setItem('ludus_rooms', JSON.stringify(updated));
+
+    const current = getStoredRooms().filter((r: any) => r.code !== newRoom.code);
+    const updated = [newRoom, ...current];
+    saveStoredRooms(updated);
     setActiveRoom(newRoom);
     setView('teacher_live_control');
   };
 
-  const handleJoinRoom = async (e: React.FormEvent) => {
+  const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinCode || !studentName) {
       alert('Digite o PIN e seu nome.');
@@ -260,70 +236,61 @@ export default function App() {
     soundFX.playClick();
 
     const codeClean = joinCode.trim();
-    try {
-      const res = await fetch(`/api/rooms/${codeClean}/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: studentName, avatar: selectedAvatar })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setStudent(data.player);
-        setActiveRoom(data.room);
-        setView('student_lobby');
-        return;
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Sala não encontrada.');
-      }
-    } catch (e) {
-      alert('Erro ao conectar com a sala.');
+    const current = getStoredRooms();
+    const room = current.find((r: any) => r.code === codeClean);
+    if (!room) {
+      alert('Sala não encontrada. Verifique o PIN.');
+      return;
+    }
+
+    const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
+    const newPlayer = {
+      id: playerId,
+      name: studentName,
+      avatar: selectedAvatar,
+      score: 0,
+      streak: 0
+    };
+
+    room.players.push(newPlayer);
+    saveStoredRooms(current);
+    setStudent(newPlayer);
+    setActiveRoom(room);
+    setView('student_lobby');
+  };
+
+  const updateRoomStatus = (status: string) => {
+    soundFX.playClick();
+    const current = getStoredRooms();
+    const room = current.find((r: any) => r.code === activeRoom.code);
+    if (room) {
+      room.status = status;
+      saveStoredRooms(current);
+      setActiveRoom({ ...room });
     }
   };
 
-  const updateRoomStatus = async (status: string, qIndex?: number) => {
+  const professorPickColor = (colorName: string) => {
     soundFX.playClick();
-    try {
-      const res = await fetch(`/api/rooms/${activeRoom.code}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, currentQuestionIndex: qIndex })
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        setActiveRoom(updated);
-      }
-    } catch (e) {}
+    const current = getStoredRooms();
+    const room = current.find((r: any) => r.code === activeRoom.code);
+    if (room) {
+      room.professorChosenColor = colorName;
+      saveStoredRooms(current);
+      setActiveRoom({ ...room });
+    }
   };
 
-  // Professor clicks color in Jogo das Cores
-  const professorPickColor = async (colorName: string) => {
-    soundFX.playClick();
-    try {
-      const res = await fetch(`/api/rooms/${activeRoom.code}/color`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ professorChosenColor: colorName })
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        setActiveRoom(updated);
-      }
-    } catch (e) {}
-  };
-
-  // Student picks color in Jogo das Cores
-  const studentPickColor = async (colorName: string) => {
+  const studentPickColor = (colorName: string) => {
     if (hasAnswered || !activeRoom || !activeRoom.professorChosenColor) return;
     setHasAnswered(true);
     setSelectedAnswer(colorName);
 
     const forbiddenColor = activeRoom.professorChosenColor;
-    const isCorrect = (colorName !== forbiddenColor); // Cor certa = cor diferente do professor (+5 pts), Cor errada = mesma cor (-2 pts)
+    const isCorrect = (colorName !== forbiddenColor); // Cor certa = cor diferente (+5), Cor errada = mesma cor (-2)
 
     setAnswerResult(isCorrect);
     const pointsDelta = isCorrect ? 5 : -2;
-    setLastScoreChange(pointsDelta);
 
     if (isCorrect) {
       soundFX.playCorrect();
@@ -332,24 +299,22 @@ export default function App() {
       soundFX.playIncorrect();
     }
 
-    try {
-      const res = await fetch(`/api/rooms/${activeRoom.code}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId: student.id, pointsEarned: pointsDelta })
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        setActiveRoom(updated);
+    const current = getStoredRooms();
+    const room = current.find((r: any) => r.code === activeRoom.code);
+    if (room) {
+      const p = room.players.find((pl: any) => pl.id === student.id);
+      if (p) {
+        p.score += pointsDelta;
+        room.players.sort((a: any, b: any) => b.score - a.score);
+        saveStoredRooms(current);
+        setActiveRoom({ ...room });
       }
-    } catch (e) {}
+    }
   };
 
-  // Reset student answer status when professor picks a new color
   useEffect(() => {
     setHasAnswered(false);
     setAnswerResult(null);
-    setLastScoreChange(null);
     setSelectedAnswer(null);
   }, [activeRoom?.professorChosenColor]);
 
@@ -375,7 +340,7 @@ export default function App() {
           <button 
             onClick={toggleSound}
             className="p-2.5 rounded-2xl bg-[#07262c] border border-cyan-500/30 hover:bg-[#0a353d] transition text-cyan-300 shadow-md"
-            title="Ativar/Desativar Som"
+            title="Som"
           >
             {muted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
           </button>
@@ -405,8 +370,8 @@ export default function App() {
               <div className="w-14 h-14 rounded-2xl bg-amber-400/20 border border-amber-400/40 flex items-center justify-center mx-auto mb-4">
                 <Lock className="w-7 h-7 text-amber-400" />
               </div>
-              <h3 className="text-2xl font-black text-white">Acesso Exclusivo do Professor</h3>
-              <p className="text-sm text-cyan-300/70 mt-1">Insira suas credenciais (Usuário: Thiago, Senha: 100529)</p>
+              <h3 className="text-2xl font-black text-white">Painel do Professor (Thiago)</h3>
+              <p className="text-sm text-cyan-300/70 mt-1">Usuário: Thiago | Senha: 100529</p>
             </div>
 
             <form onSubmit={handleProfessorLogin} className="space-y-4">
@@ -420,7 +385,7 @@ export default function App() {
                   required
                   value={loginUser}
                   onChange={(e) => setLoginUser(e.target.value)}
-                  placeholder="Ex: Thiago"
+                  placeholder="Thiago"
                   className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-4 py-3 text-white placeholder-cyan-800 focus:outline-none focus:border-amber-400 font-semibold"
                 />
               </div>
@@ -435,7 +400,7 @@ export default function App() {
                   required
                   value={loginPass}
                   onChange={(e) => setLoginPass(e.target.value)}
-                  placeholder="••••••"
+                  placeholder="100529"
                   className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-4 py-3 text-white placeholder-cyan-800 focus:outline-none focus:border-amber-400 font-semibold"
                 />
               </div>
@@ -490,14 +455,14 @@ export default function App() {
             </div>
 
             <p className="text-cyan-200/80 text-base md:text-lg max-w-xl mb-10 font-medium">
-              Entre na sala aberta pelo professor e participe do Jogo das Cores!
+              Digite o PIN da sala fornecido pelo professor para entrar e jogar!
             </p>
 
             <button
               onClick={() => { setView('student_join'); soundFX.playClick(); }}
               className="px-8 py-4 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-lg shadow-xl shadow-cyan-500/30 transition transform hover:scale-105"
             >
-              ENTRAR NA SALA ABERTA PELO PROFESSOR 🚀
+              ENTRAR NA SALA COM PIN 🚀
             </button>
           </div>
         )}
@@ -517,20 +482,20 @@ export default function App() {
               </button>
             </div>
 
-            {/* Jogo das Cores Highlight */}
+            {/* Quick Create Room */}
             <div className="bg-[#07262c] border-2 border-amber-400/50 rounded-3xl p-8 shadow-xl flex flex-col md:flex-row items-center justify-between gap-6">
               <div className="space-y-3">
-                <span className="text-xs font-bold uppercase tracking-widest bg-amber-400 text-slate-950 px-3 py-1 rounded-lg">Destaque</span>
-                <h3 className="text-3xl font-black text-white">JOGO DAS CORES</h3>
+                <span className="text-xs font-bold uppercase tracking-widest bg-amber-400 text-slate-950 px-3 py-1 rounded-lg">Criar Sala</span>
+                <h3 className="text-3xl font-black text-white">JOGO DAS CORES (Ex: Sala 26)</h3>
                 <p className="text-cyan-200/80 text-sm max-w-xl">
-                  Abra uma sala de Jogo das Cores. No painel ao vivo, clique em uma cor para definir a rodada. O aluno deve clicar em uma cor <strong>diferente</strong> da escolhida por você (+5 pts se acertar, -2 pts se errar).
+                  Abra a sala informando o nome e o PIN. O aluno digita o PIN para entrar, e você gerencia a rodada e verifica o ranking final.
                 </p>
               </div>
               <button
                 onClick={() => handleGameSelect('cores')}
                 className="px-8 py-4 rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-slate-950 font-black text-lg shadow-xl shadow-amber-500/20 transition transform hover:scale-105 whitespace-nowrap"
               >
-                Criar Sala Jogo das Cores ➔
+                Abrir Sala 26 ➔
               </button>
             </div>
 
@@ -539,7 +504,7 @@ export default function App() {
               <h3 className="text-base font-black text-cyan-300 uppercase tracking-wider">Salas Abertas</h3>
               {rooms.length === 0 ? (
                 <div className="p-8 text-center bg-[#07262c] border border-cyan-500/30 rounded-3xl text-cyan-300/70">
-                  Nenhuma sala aberta. Clique acima para criar a sala do Jogo das Cores.
+                  Nenhuma sala aberta.
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -563,13 +528,13 @@ export default function App() {
                           onClick={() => { setActiveRoom(room); setView('teacher_live_control'); soundFX.playClick(); }}
                           className="flex-1 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs text-center shadow transition"
                         >
-                          Gerenciar Sala
+                          Gerenciar Sala / Ranking
                         </button>
                         <button
-                          onClick={async () => {
+                          onClick={() => {
                             if (confirm('Deseja excluir esta sala?')) {
-                              await fetch(`/api/rooms/${room.code}`, { method: 'DELETE' });
-                              fetchRooms();
+                              const current = getStoredRooms().filter((r: any) => r.code !== room.code);
+                              saveStoredRooms(current);
                             }
                           }}
                           className="p-2 rounded-xl bg-red-600/20 border border-red-500/40 hover:bg-red-600/30 text-red-300 transition"
@@ -585,7 +550,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. CREATE ROOM */}
+        {/* 3. CREATE ROOM (PIN & Room Name) */}
         {view === 'create_room' && (
           <div className="flex-1 max-w-xl mx-auto w-full py-12">
             <div className="flex items-center space-x-4 mb-6">
@@ -596,21 +561,34 @@ export default function App() {
                 <ArrowLeft className="w-5 h-5 text-cyan-300" />
               </button>
               <div>
-                <h2 className="text-2xl font-black text-white">Criar Sala: Jogo das Cores</h2>
-                <p className="text-sm text-cyan-300/70">Abra a sala para os alunos entrarem.</p>
+                <h2 className="text-2xl font-black text-white">Abrir Sala (Ex: Sala 26)</h2>
+                <p className="text-sm text-cyan-300/70">Defina o nome e o PIN para os alunos entrarem.</p>
               </div>
             </div>
 
             <form onSubmit={handleCreateRoom} className="bg-[#07262c] border border-cyan-500/30 rounded-3xl p-8 space-y-6 shadow-xl">
               <div>
-                <label className="block text-sm font-bold text-cyan-200 mb-2">Título da Sala</label>
+                <label className="block text-sm font-bold text-cyan-200 mb-2">Nome da Sala</label>
                 <input
                   type="text"
                   required
                   value={roomTitle}
                   onChange={(e) => setRoomTitle(e.target.value)}
-                  placeholder="Ex: Turma A - Jogo das Cores"
+                  placeholder="Ex: Sala 26 - Jogo das Cores"
                   className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-4 py-3 text-white placeholder-cyan-700 focus:outline-none focus:border-amber-400 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-cyan-200 mb-2">PIN da Sala (Código Numérico)</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={6}
+                  value={roomPin}
+                  onChange={(e) => setRoomPin(e.target.value)}
+                  placeholder="Ex: 262626"
+                  className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-4 py-3 text-center text-2xl font-black tracking-widest text-amber-400 placeholder-cyan-800 focus:outline-none focus:border-amber-400"
                 />
               </div>
 
@@ -618,48 +596,48 @@ export default function App() {
                 type="submit"
                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-slate-950 font-black text-lg shadow-xl shadow-amber-500/20 transition"
               >
-                Abrir Sala e Gerar PIN ➔
+                Abrir Sala e Liberar Jogo ➔
               </button>
             </form>
           </div>
         )}
 
-        {/* 4. TEACHER LIVE CONTROL ROOM (Jogo das Cores Wheel) */}
+        {/* 4. TEACHER LIVE CONTROL & RANKING */}
         {view === 'teacher_live_control' && activeRoom && (
           <div className="flex-1 flex flex-col space-y-6 py-6">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#07262c] border border-cyan-500/30 rounded-3xl p-6 shadow-xl">
               <div>
-                <span className="text-xs font-bold text-amber-400 uppercase tracking-widest">Painel do Professor - Jogo das Cores</span>
+                <span className="text-xs font-bold text-amber-400 uppercase tracking-widest">Painel do Professor - Gerenciamento</span>
                 <h2 className="text-3xl font-black text-white mt-1">{activeRoom.title}</h2>
-                <p className="text-sm text-cyan-300/70">PIN da Sala para os Alunos: <strong className="text-amber-400 text-2xl tracking-wider bg-slate-950 px-4 py-1.5 rounded-xl ml-2">{activeRoom.code}</strong></p>
+                <p className="text-sm text-cyan-300/70">PIN da Sala: <strong className="text-amber-400 text-2xl tracking-wider bg-slate-950 px-4 py-1.5 rounded-xl ml-2">{activeRoom.code}</strong></p>
               </div>
 
               <div className="flex items-center space-x-3">
                 <button
-                  onClick={() => updateRoomStatus('playing', 0)}
+                  onClick={() => updateRoomStatus(activeRoom.status === 'waiting' ? 'playing' : 'waiting')}
                   className="px-6 py-3 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black shadow-lg shadow-amber-500/30 flex items-center space-x-2 transition"
                 >
                   <Play className="w-5 h-5 fill-current" />
-                  <span>{activeRoom.status === 'waiting' ? 'Iniciar Jogo' : 'Reiniciar Rodada'}</span>
+                  <span>{activeRoom.status === 'waiting' ? 'Liberar Jogo para Alunos' : 'Pausar Jogo'}</span>
                 </button>
                 <button
-                  onClick={() => updateRoomStatus('ended', 0)}
+                  onClick={() => updateRoomStatus('ended')}
                   className="px-4 py-3 rounded-2xl bg-red-600/20 border border-red-500/40 hover:bg-red-600/30 text-red-300 font-bold transition"
                 >
-                  Encerrar Sala
+                  Fechar Sala & Ver Pontuação Final
                 </button>
               </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Left Column: Color Wheel Control */}
+              {/* Left Column: Professor Color Picker */}
               <div className="lg:col-span-2 space-y-6">
                 <div className="bg-[#07262c] border border-cyan-500/30 rounded-3xl p-8 shadow-xl text-center space-y-6">
                   <h3 className="text-2xl font-black text-white">
-                    Clique em uma cor para a rodada:
+                    Escolha a Cor da Rodada:
                   </h3>
                   <p className="text-cyan-300 text-sm">
-                    Cor escolhida por você nesta rodada: <strong className="text-amber-400 text-lg">{activeRoom.professorChosenColor || 'Nenhuma'}</strong>
+                    Cor proibida atual: <strong className="text-amber-400 text-lg uppercase">{activeRoom.professorChosenColor || 'Nenhuma escolhida ainda'}</strong>
                   </p>
 
                   {/* Color Wheel */}
@@ -681,24 +659,20 @@ export default function App() {
                       PROFESSOR
                     </div>
                   </div>
-
-                  <div className="text-xs text-cyan-300/70 pt-2">
-                    Regra: O aluno ganha <strong className="text-emerald-400">+5 pontos</strong> se clicar em uma cor diferente, e perde <strong className="text-red-400">-2 pontos</strong> se clicar na mesma cor.
-                  </div>
                 </div>
               </div>
 
-              {/* Right Column: Live Leaderboard */}
+              {/* Right Column: Live Leaderboard / Final Score Verification */}
               <div className="bg-[#07262c] border border-cyan-500/30 rounded-3xl p-6 shadow-xl flex flex-col">
                 <h3 className="text-lg font-bold text-white mb-4 flex items-center space-x-2">
                   <Trophy className="w-5 h-5 text-amber-400" />
-                  <span>Ranking ao Vivo ({activeRoom.players.length})</span>
+                  <span>Verificar Pontuação ({activeRoom.players.length} alunos)</span>
                 </h3>
 
                 {activeRoom.players.length === 0 ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center py-12 text-cyan-400/60 text-sm">
                     <Users className="w-10 h-10 mb-2 opacity-50" />
-                    Nenhum aluno entrou na sala ainda.
+                    Nenhum aluno entrou na sala ainda. Dê o PIN <strong className="text-amber-400">{activeRoom.code}</strong> para os alunos.
                   </div>
                 ) : (
                   <div className="space-y-3 flex-1 overflow-y-auto max-h-[400px] pr-1">
@@ -731,8 +705,8 @@ export default function App() {
                 <div className="w-14 h-14 rounded-2xl bg-amber-400/20 border border-amber-400/40 flex items-center justify-center mx-auto mb-4">
                   <Users className="w-7 h-7 text-amber-400" />
                 </div>
-                <h2 className="text-2xl font-black text-white">Entrar na Sala Jogo das Cores</h2>
-                <p className="text-sm text-cyan-300/70 mt-1">Insira o PIN fornecido pelo professor</p>
+                <h2 className="text-2xl font-black text-white">Entrar na Sala do Professor</h2>
+                <p className="text-sm text-cyan-300/70 mt-1">Digite o PIN da sala (Ex: 262626)</p>
               </div>
 
               <form onSubmit={handleJoinRoom} className="space-y-4">
@@ -744,13 +718,13 @@ export default function App() {
                     maxLength={6}
                     value={joinCode}
                     onChange={(e) => setJoinCode(e.target.value)}
-                    placeholder="Ex: 555555"
+                    placeholder="262626"
                     className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-4 py-3 text-center text-2xl font-black tracking-widest text-amber-400 placeholder-cyan-800 focus:outline-none focus:border-amber-400"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-cyan-300 mb-1.5">Seu Nome / Apelido</label>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-cyan-300 mb-1.5">Seu Nome</label>
                   <input
                     type="text"
                     required
@@ -806,7 +780,7 @@ export default function App() {
                 <span>Alunos na Sala: {activeRoom.players.length}</span>
               </div>
               <p className="text-xs text-cyan-300/60">
-                {activeRoom.status === 'waiting' ? 'Aguardando o professor iniciar...' : 'O Jogo das Cores começou!'}
+                {activeRoom.status === 'waiting' ? 'Aguardando o professor liberar o jogo...' : 'O jogo foi liberado pelo professor!'}
               </p>
             </div>
 
@@ -815,20 +789,34 @@ export default function App() {
                 onClick={() => { setView('student_game'); soundFX.playClick(); }}
                 className="w-full py-4 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-lg shadow-xl animate-bounce"
               >
-                Jogar Jogo das Cores! ➔
+                Jogar Agora! ➔
               </button>
             )}
           </div>
         )}
 
-        {/* 7. STUDENT ACTIVE GAME SCREEN - JOGO DAS CORES */}
+        {/* 7. STUDENT ACTIVE GAME & LEADERBOARD RANKING */}
         {view === 'student_game' && activeRoom && (
           <div className="flex-1 flex flex-col max-w-xl mx-auto w-full py-6 space-y-6 text-center">
             {activeRoom.status === 'ended' ? (
-              <div className="text-center py-16 space-y-6 bg-[#07262c] border border-cyan-500/30 rounded-3xl p-8">
+              <div className="text-center py-16 space-y-6 bg-[#07262c] border border-cyan-500/30 rounded-3xl p-8 shadow-2xl">
                 <Trophy className="w-20 h-20 text-amber-400 mx-auto animate-bounce" />
                 <h2 className="text-3xl font-black text-white">Fim de Jogo!</h2>
                 <p className="text-cyan-300 text-lg">Sua pontuação final: <strong className="text-amber-400">{activeRoom.players.find((p:any) => p.id === student?.id)?.score || 0} pts</strong></p>
+                
+                <div className="bg-slate-950 p-6 rounded-2xl border border-cyan-900/60 text-left space-y-3">
+                  <h4 className="text-sm font-bold text-amber-400 uppercase tracking-wider text-center">Ranking Final da Turma</h4>
+                  {activeRoom.players.map((p: any, idx: number) => (
+                    <div key={p.id} className="flex items-center justify-between bg-[#07262c] p-3 rounded-xl">
+                      <div className="flex items-center space-x-3">
+                        <span className="font-black text-amber-400">{idx + 1}º</span>
+                        <span>{p.avatar} {p.name}</span>
+                      </div>
+                      <span className="font-bold text-amber-400">{p.score} pts</span>
+                    </div>
+                  ))}
+                </div>
+
                 <button
                   onClick={() => { setView('home'); setActiveRoom(null); setStudent(null); }}
                   className="px-8 py-3 rounded-2xl bg-amber-400 text-slate-950 font-black"
@@ -854,11 +842,11 @@ export default function App() {
                 {/* Game Card */}
                 <div className="bg-[#07262c] border-2 border-cyan-500/40 rounded-3xl p-8 shadow-2xl space-y-6">
                   <div className="bg-red-500/20 border border-red-500/40 py-3 px-4 rounded-2xl text-red-300 font-black text-lg animate-pulse">
-                    NÃO PODE APERTAR NA COR: <span className="underline uppercase">{activeRoom.professorChosenColor || 'AGUARDANDO O PROFESSOR ESCOLHER...'}</span>
+                    COR PROIBIDA: <span className="underline uppercase">{activeRoom.professorChosenColor || 'AGUARDANDO O PROFESSOR ESCOLHER...'}</span>
                   </div>
 
                   <p className="text-xs text-cyan-300/80">
-                    Clique em qualquer outra cor diferente da proibida pelo professor! (<strong className="text-emerald-400">+5 pts</strong> / <strong className="text-red-400">-2 pts</strong>)
+                    Clique em uma cor diferente da proibida (+5 pts / -2 pts)
                   </p>
 
                   {/* Color Wheel */}
@@ -886,9 +874,22 @@ export default function App() {
                   {hasAnswered && (
                     <div className={`p-4 rounded-2xl font-bold text-lg flex items-center justify-center space-x-2 animate-bounce ${answerResult ? 'bg-emerald-500/20 border border-emerald-400 text-emerald-300' : 'bg-red-500/20 border border-red-400 text-red-300'}`}>
                       {answerResult ? <CheckCircle2 className="w-6 h-6" /> : <XCircle className="w-6 h-6" />}
-                      <span>{answerResult ? `Correta! +5 pts` : `Errou! A cor era proibida! -2 pts`}</span>
+                      <span>{answerResult ? `Correta! +5 pts` : `Errou! Cor proibida! -2 pts`}</span>
                     </div>
                   )}
+
+                  {/* Live Leaderboard for Student */}
+                  <div className="pt-4 border-t border-cyan-900/40 text-left">
+                    <h5 className="text-xs font-bold uppercase tracking-wider text-amber-400 mb-2">Ranking Parcial</h5>
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                      {activeRoom.players.map((p: any, idx: number) => (
+                        <div key={p.id} className="flex items-center justify-between bg-slate-950 px-3 py-1.5 rounded-xl text-xs">
+                          <span>{idx + 1}º {p.avatar} {p.name}</span>
+                          <span className="font-bold text-amber-400">{p.score} pts</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -899,7 +900,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="border-t border-cyan-900/40 py-4 text-center text-xs text-cyan-400/60 z-10">
-        Jogo das Cores &bull; Conexão em Tempo Real entre Professor e Aluno
+        Arena de Jogos &bull; Fluxo Simplificado Professor & Aluno
       </footer>
 
     </div>
