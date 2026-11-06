@@ -9,15 +9,15 @@ dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// In-memory store for game rooms to support real-time multiplayer across tabs/devices
 interface GameRoom {
   id: string;
   code: string;
   title: string;
   subject: string;
-  gameType: 'quiz' | 'forca' | 'verdadeiro_falso' | 'cores';
+  gameType: 'quiz' | 'forca' | 'verdadeiro_falso' | 'cores' | 'stop';
   status: 'waiting' | 'playing' | 'ended';
   currentQuestionIndex: number;
+  professorChosenColor?: string | null;
   questions: any[];
   players: {
     id: string;
@@ -32,6 +32,22 @@ interface GameRoom {
 
 const activeRooms = new Map<string, GameRoom>();
 
+// Seed default rooms for instant testing
+const defaultRoom: GameRoom = {
+  id: 'room_555555',
+  code: '555555',
+  title: 'Sala 5 - Jogo das Cores',
+  subject: 'Cores',
+  gameType: 'cores',
+  status: 'waiting',
+  currentQuestionIndex: -1,
+  professorChosenColor: null,
+  questions: [{ id: 1 }],
+  players: [],
+  createdAt: Date.now()
+};
+activeRooms.set('555555', defaultRoom);
+
 async function startServer() {
   const app = express();
   app.use(express.json());
@@ -45,61 +61,30 @@ async function startServer() {
       const apiKey = process.env.GEMINI_API_KEY;
 
       if (!apiKey) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY não configurada. Configure a chave no painel da AI Studio.' });
+        return res.status(500).json({ error: 'GEMINI_API_KEY não configurada.' });
       }
 
       const ai = new GoogleGenAI({ apiKey });
-
-      let prompt = '';
-      if (gameType === 'forca') {
-        prompt = `Gere ${count} palavras ou termos curtos educacionais sobre o tópico: "${topic}" em Português.
-Retorne APENAS um JSON válido no formato:
-[
-  { "word": "FOTOSSINTESE", "hint": "Processo que plantas usam para produzir energia" },
-  { "word": "GRAVIDADE", "hint": "Força que atrai os corpos para o centro da Terra" }
-]`;
-      } else if (gameType === 'verdadeiro_falso') {
-        prompt = `Gere ${count} afirmações (verdadeiras ou falsas) sobre o tópico: "${topic}" em Português.
-Retorne APENAS um JSON válido no formato:
-[
-  { "statement": "A água ferve a 100°C ao nível do mar.", "isTrue": true, "explanation": "Condição padrão de ebulição da água." },
-  { "statement": "O Sol gira em torno da Terra.", "isTrue": false, "explanation": "A Terra gira em torno do Sol." }
-]`;
-      } else {
-        // Quiz multipla escolha
-        prompt = `Gere ${count} perguntas de múltipla escolha (estilo Kahoot) sobre o tópico: "${topic}" em Português.
-Retorne APENAS um JSON válido no formato:
-[
-  {
-    "question": "Qual é a capital do Brasil?",
-    "options": ["São Paulo", "Rio de Janeiro", "Brasília", "Salvador"],
-    "correctIndex": 2,
-    "timeLimit": 20
-  }
-]`;
-      }
+      const prompt = `Gere ${count} perguntas de múltipla escolha sobre: "${topic}" em Português no formato JSON: [{ "question": "...", "options": ["..."], "correctIndex": 0 }]`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
+        config: { responseMimeType: 'application/json' },
       });
 
       const text = response.text || '[]';
-      // Clean markdown code blocks if any
       const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
 
       res.json({ questions: parsed });
     } catch (error: any) {
-      console.error('Error generating questions with Gemini:', error);
-      res.status(500).json({ error: error.message || 'Erro ao gerar perguntas com IA.' });
+      console.error('Error generating questions:', error);
+      res.status(500).json({ error: error.message || 'Erro ao gerar.' });
     }
   });
 
-  // REST API for Rooms (polling-based real-time sync for simplicity and robust multi-tab support)
+  // Rooms API
   app.get('/api/rooms', (req, res) => {
     const rooms = Array.from(activeRooms.values());
     res.json(rooms);
@@ -118,6 +103,7 @@ Retorne APENAS um JSON válido no formato:
       gameType: gameType || 'quiz',
       status: 'waiting',
       currentQuestionIndex: -1,
+      professorChosenColor: null,
       questions: questions || [],
       players: [],
       createdAt: Date.now(),
@@ -144,10 +130,11 @@ Retorne APENAS um JSON válido no formato:
       return res.status(404).json({ error: 'Sala não encontrada' });
     }
 
+    // Check if player already exists by name or create new
     const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
     const newPlayer = {
       id: playerId,
-      name: name || 'Aluno Anônimo',
+      name: name || 'Aluno',
       avatar: avatar || '🦁',
       score: 0,
       streak: 0,
@@ -172,9 +159,22 @@ Retorne APENAS um JSON válido no formato:
     res.json(room);
   });
 
+  app.post('/api/rooms/:code/color', (req, res) => {
+    const { code } = req.params;
+    const { professorChosenColor } = req.body;
+    const room = activeRooms.get(code);
+
+    if (!room) {
+      return res.status(404).json({ error: 'Sala não encontrada' });
+    }
+
+    room.professorChosenColor = professorChosenColor;
+    res.json(room);
+  });
+
   app.post('/api/rooms/:code/answer', (req, res) => {
     const { code } = req.params;
-    const { playerId, answerIndex, isCorrect, pointsEarned } = req.body;
+    const { playerId, pointsEarned } = req.body;
     const room = activeRooms.get(code);
 
     if (!room) {
@@ -183,14 +183,7 @@ Retorne APENAS um JSON válido no formato:
 
     const player = room.players.find(p => p.id === playerId);
     if (player) {
-      player.lastAnswerCorrect = isCorrect;
-      if (isCorrect) {
-        player.score += (pointsEarned || 1000);
-        player.streak += 1;
-      } else {
-        player.streak = 0;
-      }
-      // Sort players by score descending
+      player.score += (pointsEarned || 0);
       room.players.sort((a, b) => b.score - a.score);
     }
 

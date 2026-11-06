@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Trophy, Users, Play, Plus, Trash2, Sparkles, ArrowLeft, CheckCircle2, 
-  XCircle, Volume2, VolumeX, Gamepad2, Flame, ChevronRight, 
-  LogOut, FileSpreadsheet, Download, Upload, RefreshCw, GraduationCap, Lock, User, KeyRound, Send 
+  Trophy, Users, Play, Trash2, Sparkles, ArrowLeft, CheckCircle2, 
+  XCircle, Volume2, VolumeX, Gamepad2, 
+  LogOut, FileSpreadsheet, Download, Upload, GraduationCap, Lock, User, KeyRound 
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import * as XLSX from 'xlsx';
@@ -109,8 +109,8 @@ export default function App() {
   // Form states for creating room
   const [roomTitle, setRoomTitle] = useState('');
   const [roomSubject, setRoomSubject] = useState('');
-  const [gameType, setGameType] = useState<'quiz' | 'verdadeiro_falso' | 'forca' | 'cores' | 'stop'>('quiz');
-  const [questions, setQuestions] = useState<any[]>([]);
+  const [gameType, setGameType] = useState<'quiz' | 'verdadeiro_falso' | 'forca' | 'cores' | 'stop'>('cores');
+  const [questions, setQuestions] = useState<any[]>([{ id: 1 }]);
   const [joinCode, setJoinCode] = useState('');
   const [studentName, setStudentName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState('🦁');
@@ -121,67 +121,47 @@ export default function App() {
   const [lastScoreChange, setLastScoreChange] = useState<number | null>(null);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
 
-  const updateRoomStatus = (status: string, qIndex?: number) => {
-    soundFX.playClick();
-    const currentRooms = fetchRoomsLocal();
-    const room = currentRooms.find((r: any) => r.code === activeRoom.code);
-    if (room) {
-      if (status !== undefined) room.status = status;
-      if (qIndex !== undefined) room.currentQuestionIndex = qIndex;
-      saveRoomsLocal(currentRooms);
-      setActiveRoom({ ...room });
+  // Fetch rooms from API with localStorage fallback
+  const fetchRooms = async () => {
+    try {
+      const res = await fetch('/api/rooms');
+      if (res.ok) {
+        const data = await res.json();
+        setRooms(data);
+        localStorage.setItem('ludus_rooms', JSON.stringify(data));
+        return;
+      }
+    } catch (e) {
+      // Fallback local
     }
-  };
-
-  // Load rooms from localStorage with fallback
-  const fetchRoomsLocal = () => {
     try {
       const local = localStorage.getItem('ludus_rooms');
       if (local) {
-        return JSON.parse(local);
+        setRooms(JSON.parse(local));
       }
-    } catch (e) {
-      console.error(e);
-    }
-    return [
-      { id: 'room_5', code: '555555', title: 'Sala 5 - Jogo das Cores', subject: 'Cores', gameType: 'cores', status: 'waiting', professorChosenColor: null, questions: [{ id: 1 }], players: [], createdAt: Date.now() }
-    ];
-  };
-
-  const saveRoomsLocal = (updatedRooms: any[]) => {
-    try {
-      localStorage.setItem('ludus_rooms', JSON.stringify(updatedRooms));
-      setRooms(updatedRooms);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) {}
   };
 
   useEffect(() => {
-    const initial = fetchRoomsLocal();
-    setRooms(initial);
-    localStorage.setItem('ludus_rooms', JSON.stringify(initial));
-  }, []);
-
-  // Poll active rooms
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setRooms(fetchRoomsLocal());
-    }, 2000);
+    fetchRooms();
+    const interval = setInterval(fetchRooms, 1500);
     return () => clearInterval(interval);
   }, []);
 
-  // Poll specific active room state
+  // Poll active room state
   useEffect(() => {
     if (!activeRoom) return;
     const code = activeRoom.code;
-    const interval = setInterval(() => {
-      const currentRooms = fetchRoomsLocal();
-      const found = currentRooms.find((r: any) => r.code === code);
-      if (found) {
-        setActiveRoom(found);
-      }
-    }, 1500);
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/rooms/${code}`);
+        if (res.ok) {
+          const data = await res.json();
+          setActiveRoom(data);
+          return;
+        }
+      } catch (e) {}
+    }, 1000);
     return () => clearInterval(interval);
   }, [activeRoom?.code]);
 
@@ -222,7 +202,7 @@ export default function App() {
     soundFX.playClick();
   };
 
-  const handleCreateRoom = (e: React.FormEvent) => {
+  const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!roomTitle) {
       alert('Preencha o título da sala.');
@@ -230,6 +210,27 @@ export default function App() {
     }
     soundFX.playClick();
 
+    try {
+      const res = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: roomTitle,
+          subject: roomSubject || 'Geral',
+          gameType,
+          questions
+        })
+      });
+      if (res.ok) {
+        const newRoom = await res.json();
+        setActiveRoom(newRoom);
+        setView('teacher_live_control');
+        fetchRooms();
+        return;
+      }
+    } catch (e) {}
+
+    // Fallback local
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const newRoom = {
       id: 'room_' + Date.now(),
@@ -239,19 +240,18 @@ export default function App() {
       gameType,
       status: 'waiting',
       professorChosenColor: null,
-      questions: [{ id: 1 }],
+      questions,
       players: [],
       createdAt: Date.now()
     };
-
-    const currentRooms = fetchRoomsLocal();
-    const updated = [newRoom, ...currentRooms];
-    saveRoomsLocal(updated);
+    const updated = [newRoom, ...rooms];
+    setRooms(updated);
+    localStorage.setItem('ludus_rooms', JSON.stringify(updated));
     setActiveRoom(newRoom);
     setView('teacher_live_control');
   };
 
-  const handleJoinRoom = (e: React.FormEvent) => {
+  const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinCode || !studentName) {
       alert('Digite o PIN e seu nome.');
@@ -260,45 +260,60 @@ export default function App() {
     soundFX.playClick();
 
     const codeClean = joinCode.trim();
-    const currentRooms = fetchRoomsLocal();
-    const room = currentRooms.find((r: any) => r.code === codeClean);
-    if (!room) {
-      alert('Sala não encontrada.');
-      return;
+    try {
+      const res = await fetch(`/api/rooms/${codeClean}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: studentName, avatar: selectedAvatar })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStudent(data.player);
+        setActiveRoom(data.room);
+        setView('student_lobby');
+        return;
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Sala não encontrada.');
+      }
+    } catch (e) {
+      alert('Erro ao conectar com a sala.');
     }
+  };
 
-    const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
-    const newPlayer = {
-      id: playerId,
-      name: studentName,
-      avatar: selectedAvatar,
-      score: 0,
-      streak: 0
-    };
-
-    room.players.push(newPlayer);
-    saveRoomsLocal(currentRooms);
-    setStudent(newPlayer);
-    setActiveRoom(room);
-    setView('student_lobby');
+  const updateRoomStatus = async (status: string, qIndex?: number) => {
+    soundFX.playClick();
+    try {
+      const res = await fetch(`/api/rooms/${activeRoom.code}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, currentQuestionIndex: qIndex })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setActiveRoom(updated);
+      }
+    } catch (e) {}
   };
 
   // Professor clicks color in Jogo das Cores
-  const professorPickColor = (colorName: string) => {
+  const professorPickColor = async (colorName: string) => {
     soundFX.playClick();
-    const currentRooms = fetchRoomsLocal();
-    const room = currentRooms.find((r: any) => r.code === activeRoom.code);
-    if (room) {
-      room.professorChosenColor = colorName;
-      // Reset student answer status for this round
-      room.players.forEach((p: any) => { p.hasAnsweredRound = false; });
-      saveRoomsLocal(currentRooms);
-      setActiveRoom({ ...room });
-    }
+    try {
+      const res = await fetch(`/api/rooms/${activeRoom.code}/color`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ professorChosenColor: colorName })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setActiveRoom(updated);
+      }
+    } catch (e) {}
   };
 
   // Student picks color in Jogo das Cores
-  const studentPickColor = (colorName: string) => {
+  const studentPickColor = async (colorName: string) => {
     if (hasAnswered || !activeRoom || !activeRoom.professorChosenColor) return;
     setHasAnswered(true);
     setSelectedAnswer(colorName);
@@ -317,17 +332,17 @@ export default function App() {
       soundFX.playIncorrect();
     }
 
-    const currentRooms = fetchRoomsLocal();
-    const room = currentRooms.find((r: any) => r.code === activeRoom.code);
-    if (room) {
-      const p = room.players.find((pl: any) => pl.id === student.id);
-      if (p) {
-        p.score += pointsDelta;
-        room.players.sort((a: any, b: any) => b.score - a.score);
-        saveRoomsLocal(currentRooms);
-        setActiveRoom({ ...room });
+    try {
+      const res = await fetch(`/api/rooms/${activeRoom.code}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerId: student.id, pointsEarned: pointsDelta })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setActiveRoom(updated);
       }
-    }
+    } catch (e) {}
   };
 
   // Reset student answer status when professor picks a new color
@@ -551,10 +566,10 @@ export default function App() {
                           Gerenciar Sala
                         </button>
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             if (confirm('Deseja excluir esta sala?')) {
-                              const current = fetchRoomsLocal().filter((r: any) => r.code !== room.code);
-                              saveRoomsLocal(current);
+                              await fetch(`/api/rooms/${room.code}`, { method: 'DELETE' });
+                              fetchRooms();
                             }
                           }}
                           className="p-2 rounded-xl bg-red-600/20 border border-red-500/40 hover:bg-red-600/30 text-red-300 transition"
@@ -647,10 +662,10 @@ export default function App() {
                     Cor escolhida por você nesta rodada: <strong className="text-amber-400 text-lg">{activeRoom.professorChosenColor || 'Nenhuma'}</strong>
                   </p>
 
-                  {/* Color Wheel Matching Reference Image 2183e939.png */}
-                  <div className="relative w-64 h-64 mx-auto rounded-full border-4 border-slate-800 shadow-2xl overflow-hidden bg-slate-950 flex items-center justify-center p-2">
+                  {/* Color Wheel */}
+                  <div className="relative w-64 h-64 mx-auto rounded-full border-4 border-slate-800 shadow-2xl overflow-hidden bg-black flex items-center justify-center p-2">
                     <div className="absolute inset-0 grid grid-cols-2 grid-rows-3 gap-1 p-2">
-                      {COLOR_WHEEL_ITEMS.map((c, i) => (
+                      {COLOR_WHEEL_ITEMS.map((c) => (
                         <button
                           key={c.name}
                           onClick={() => professorPickColor(c.name)}
@@ -661,7 +676,7 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                    {/* Center black hub matching reference image */}
+                    {/* Center black hub */}
                     <div className="w-20 h-20 bg-black rounded-full border-4 border-slate-800 shadow-inner z-10 flex items-center justify-center text-[10px] text-amber-400 font-black uppercase tracking-widest text-center px-1">
                       PROFESSOR
                     </div>
@@ -806,7 +821,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 7. STUDENT ACTIVE GAME SCREEN - JOGO DAS CORES (Color Wheel & Rules) */}
+        {/* 7. STUDENT ACTIVE GAME SCREEN - JOGO DAS CORES */}
         {view === 'student_game' && activeRoom && (
           <div className="flex-1 flex flex-col max-w-xl mx-auto w-full py-6 space-y-6 text-center">
             {activeRoom.status === 'ended' ? (
@@ -846,8 +861,8 @@ export default function App() {
                     Clique em qualquer outra cor diferente da proibida pelo professor! (<strong className="text-emerald-400">+5 pts</strong> / <strong className="text-red-400">-2 pts</strong>)
                   </p>
 
-                  {/* Color Wheel Matching Reference Image 2183e939.png */}
-                  <div className="relative w-64 h-64 mx-auto rounded-full border-4 border-slate-800 shadow-2xl overflow-hidden bg-slate-950 flex items-center justify-center p-2">
+                  {/* Color Wheel */}
+                  <div className="relative w-64 h-64 mx-auto rounded-full border-4 border-slate-800 shadow-2xl overflow-hidden bg-black flex items-center justify-center p-2">
                     <div className="absolute inset-0 grid grid-cols-2 grid-rows-3 gap-1 p-2">
                       {COLOR_WHEEL_ITEMS.map((c) => (
                         <button
@@ -884,7 +899,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="border-t border-cyan-900/40 py-4 text-center text-xs text-cyan-400/60 z-10">
-        Jogo das Cores &bull; Regra: Não pode apertar na cor escolhida pelo professor (+5 / -2)
+        Jogo das Cores &bull; Conexão em Tempo Real entre Professor e Aluno
       </footer>
 
     </div>
